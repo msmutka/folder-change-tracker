@@ -58,7 +58,7 @@ public class FolderAnalysisService : IFolderAnalysisService
         string[] entryPaths;
         try
         {
-            entryPaths = Directory.GetFileSystemEntries(normalizedPath);
+            entryPaths = Directory.GetFileSystemEntries(normalizedPath, "*", SearchOption.AllDirectories);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -67,7 +67,7 @@ public class FolderAnalysisService : IFolderAnalysisService
 
         var fileCount = entryPaths.Count(e => !Directory.Exists(e));
         if (fileCount > MaxFiles)
-            return Failure($"Folder contains more than {MaxFiles} files. Analysis is limited to {MaxFiles} files per folder.");
+            return Failure($"Folder contains more than {MaxFiles} files (including subdirectories). Analysis is limited to {MaxFiles} files per folder.");
 
         List<(string RelPath, bool IsDir, string? Hash)> scanned;
         List<string> unreadable;
