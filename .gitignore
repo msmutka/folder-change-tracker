@@ -47,6 +47,9 @@ CodeCoverage/
 # MSBuild Binary and Structured Log
 *.binlog
 
+# Application state files
+data/
+
 # MSTest test Results
 [Tt]est[Rr]esult*/
 [Bb]uild[Ll]og.*
