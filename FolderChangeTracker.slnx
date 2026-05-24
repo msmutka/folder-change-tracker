@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="FolderChangeTracker.Tests/FolderChangeTracker.Tests.csproj" />
+  <Project Path="FolderChangeTracker/FolderChangeTracker.csproj" />
+</Solution>
