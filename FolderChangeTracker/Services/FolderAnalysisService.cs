@@ -83,11 +83,10 @@ public class FolderAnalysisService : IFolderAnalysisService, IDisposable
             return Failure($"Folder became inaccessible during analysis: {ex.Message}");
         }
 
-        var fileCount = entryPaths.Count(e => !Directory.Exists(e));
-        if (fileCount > MaxFiles)
+        if (entryPaths.Length > MaxFiles)
         {
-            _logger.LogWarning("Folder {Path} contains {FileCount} files, exceeds limit of {MaxFiles}", normalizedPath, fileCount, MaxFiles);
-            return Failure($"Folder contains more than {MaxFiles} files (including subdirectories). Analysis is limited to {MaxFiles} files per folder.");
+            _logger.LogWarning("Folder {Path} contains {EntryCount} entries, exceeds limit of {MaxFiles}", normalizedPath, entryPaths.Length, MaxFiles);
+            return Failure($"Folder contains more than {MaxFiles} entries (files and subfolders). Analysis is limited to {MaxFiles} entries per folder.");
         }
 
         List<(string RelPath, bool IsDir, string? Hash)> scanned;
@@ -230,7 +229,10 @@ public class FolderAnalysisService : IFolderAnalysisService, IDisposable
                     entries.Add((relativePath, false, hash));
             });
 
-        return ([..entries], [..unreadable]);
+        return (
+            [..entries.OrderBy(e => e.RelPath, StringComparer.OrdinalIgnoreCase)],
+            [..unreadable.Order(StringComparer.OrdinalIgnoreCase)]
+        );
     }
 
     private static async Task<(string? Hash, bool IsUnreadable)> TryHashFileAsync(string entryPath, CancellationToken ct)

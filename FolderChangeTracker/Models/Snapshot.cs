@@ -4,5 +4,5 @@ public record Snapshot
 {
     public string TrackedPath { get; init; } = string.Empty;
     public DateTimeOffset CapturedAt { get; init; }
-    public List<FileEntry> Entries { get; init; } = [];
+    public IReadOnlyList<FileEntry> Entries { get; init; } = [];
 }
