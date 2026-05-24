@@ -77,7 +77,9 @@ public class SnapshotRepository : ISnapshotRepository
 
     private string GetFilePath(string trackedPath)
     {
-        var normalized = Path.GetFullPath(trackedPath).ToLowerInvariant();
+        var normalized = OperatingSystem.IsWindows()
+            ? Path.GetFullPath(trackedPath).ToLowerInvariant()
+            : Path.GetFullPath(trackedPath);
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)));
         return Path.Combine(_dataDirectory, hash + ".json");
     }

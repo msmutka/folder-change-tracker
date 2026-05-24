@@ -10,9 +10,12 @@ public class FolderAnalysisService : IFolderAnalysisService, IDisposable
     private const long MaxFileSizeBytes = 50L * 1024 * 1024;
     private const int ScanParallelism = 4;
 
+    private static readonly StringComparer PathComparer =
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
     private readonly ISnapshotRepository _repository;
     private readonly ILogger<FolderAnalysisService> _logger;
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new(PathComparer);
 
     public FolderAnalysisService(ISnapshotRepository repository, ILogger<FolderAnalysisService> logger)
     {
@@ -102,11 +105,11 @@ public class FolderAnalysisService : IFolderAnalysisService, IDisposable
         }
 
         var (previous, snapshotWasReset) = await _repository.LoadAsync(normalizedPath, ct);
-        var previousByPath = previous?.Entries.ToDictionary(e => e.RelativePath, StringComparer.OrdinalIgnoreCase)
-                             ?? new Dictionary<string, FileEntry>(StringComparer.OrdinalIgnoreCase);
+        var previousByPath = previous?.Entries.ToDictionary(e => e.RelativePath, PathComparer)
+                             ?? new Dictionary<string, FileEntry>(PathComparer);
 
         var currentEntries = BuildEntries(scanned, previousByPath);
-        var unreadableSet = new HashSet<string>(unreadable, StringComparer.OrdinalIgnoreCase);
+        var unreadableSet = new HashSet<string>(unreadable, PathComparer);
         var carried = BuildCarried(previous, previousByPath, currentEntries, unreadableSet);
 
         var saveFailed = await TrySaveSnapshotAsync(normalizedPath, currentEntries, carried, ct);
@@ -131,7 +134,7 @@ public class FolderAnalysisService : IFolderAnalysisService, IDisposable
         HashSet<string> unreadableSet)
     {
         if (previous == null) return [];
-        var currentPaths = new HashSet<string>(currentEntries.Select(e => e.RelativePath), StringComparer.OrdinalIgnoreCase);
+        var currentPaths = new HashSet<string>(currentEntries.Select(e => e.RelativePath), PathComparer);
         return previousByPath.Values
             .Where(e => unreadableSet.Contains(e.RelativePath) && !currentPaths.Contains(e.RelativePath))
             .ToList();
@@ -181,7 +184,7 @@ public class FolderAnalysisService : IFolderAnalysisService, IDisposable
         List<string> unreadable,
         bool saveFailed)
     {
-        var currentByPath = currentEntries.ToDictionary(e => e.RelativePath, StringComparer.OrdinalIgnoreCase);
+        var currentByPath = currentEntries.ToDictionary(e => e.RelativePath, PathComparer);
 
         var added = currentEntries.Where(e => !previousByPath.ContainsKey(e.RelativePath)).ToList();
         var removed = previous.Entries
@@ -230,8 +233,8 @@ public class FolderAnalysisService : IFolderAnalysisService, IDisposable
             });
 
         return (
-            [..entries.OrderBy(e => e.RelPath, StringComparer.OrdinalIgnoreCase)],
-            [..unreadable.Order(StringComparer.OrdinalIgnoreCase)]
+            [..entries.OrderBy(e => e.RelPath, PathComparer)],
+            [..unreadable.Order(PathComparer)]
         );
     }
 
