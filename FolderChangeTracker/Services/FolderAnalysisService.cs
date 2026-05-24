@@ -11,21 +11,29 @@ public class FolderAnalysisService : IFolderAnalysisService, IDisposable
     private const int ScanParallelism = 4;
 
     private readonly ISnapshotRepository _repository;
+    private readonly ILogger<FolderAnalysisService> _logger;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new(StringComparer.OrdinalIgnoreCase);
 
-    public FolderAnalysisService(ISnapshotRepository repository)
+    public FolderAnalysisService(ISnapshotRepository repository, ILogger<FolderAnalysisService> logger)
     {
         _repository = repository;
+        _logger = logger;
     }
 
     public async Task<AnalysisResult> AnalyzeAsync(string path, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(path))
+        {
+            _logger.LogDebug("Analysis rejected: path is empty");
             return Failure("Path cannot be empty.");
+        }
 
         var trimmed = path.Trim();
         if (!Path.IsPathFullyQualified(trimmed))
+        {
+            _logger.LogDebug("Analysis rejected: path {Path} is not absolute", trimmed);
             return Failure("Path must be an absolute path (e.g. C:\\Users\\...). Relative paths are not accepted.");
+        }
 
         string normalizedPath;
         try
@@ -34,11 +42,15 @@ public class FolderAnalysisService : IFolderAnalysisService, IDisposable
         }
         catch (Exception)
         {
+            _logger.LogDebug("Analysis rejected: path {Path} is invalid", trimmed);
             return Failure("Path is invalid.");
         }
 
         if (File.Exists(normalizedPath))
+        {
+            _logger.LogDebug("Analysis rejected: path {Path} points to a file, not a folder", normalizedPath);
             return Failure("The specified path points to a file, not a folder.");
+        }
 
         var semaphore = _locks.GetOrAdd(normalizedPath, _ => new SemaphoreSlim(1, 1));
         await semaphore.WaitAsync(ct);
@@ -46,6 +58,7 @@ public class FolderAnalysisService : IFolderAnalysisService, IDisposable
         {
             if (!Directory.Exists(normalizedPath))
             {
+                _logger.LogWarning("Folder {Path} no longer exists, deleting snapshot", normalizedPath);
                 await _repository.DeleteAsync(normalizedPath, ct);
                 return Failure("Folder does not exist or is not accessible.");
             }
@@ -66,12 +79,16 @@ public class FolderAnalysisService : IFolderAnalysisService, IDisposable
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            _logger.LogError(ex, "Folder {Path} became inaccessible while enumerating entries", normalizedPath);
             return Failure($"Folder became inaccessible during analysis: {ex.Message}");
         }
 
         var fileCount = entryPaths.Count(e => !Directory.Exists(e));
         if (fileCount > MaxFiles)
+        {
+            _logger.LogWarning("Folder {Path} contains {FileCount} files, exceeds limit of {MaxFiles}", normalizedPath, fileCount, MaxFiles);
             return Failure($"Folder contains more than {MaxFiles} files (including subdirectories). Analysis is limited to {MaxFiles} files per folder.");
+        }
 
         List<(string RelPath, bool IsDir, string? Hash)> scanned;
         List<string> unreadable;
@@ -81,6 +98,7 @@ public class FolderAnalysisService : IFolderAnalysisService, IDisposable
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            _logger.LogError(ex, "Folder {Path} became inaccessible during file scan", normalizedPath);
             return Failure($"Folder became inaccessible during analysis: {ex.Message}");
         }
 
@@ -94,9 +112,17 @@ public class FolderAnalysisService : IFolderAnalysisService, IDisposable
 
         var saveFailed = await TrySaveSnapshotAsync(normalizedPath, currentEntries, carried, ct);
 
-        return previous == null
-            ? BuildInitialResult(currentEntries, unreadable, snapshotWasReset, saveFailed)
-            : BuildDiffResult(previous, currentEntries, previousByPath, unreadableSet, unreadable, saveFailed);
+        if (previous == null)
+        {
+            _logger.LogInformation("Initial snapshot captured for {Path}: {EntryCount} entries", normalizedPath, currentEntries.Count);
+            return BuildInitialResult(currentEntries, unreadable, snapshotWasReset, saveFailed);
+        }
+
+        var result = BuildDiffResult(previous, currentEntries, previousByPath, unreadableSet, unreadable, saveFailed);
+        _logger.LogInformation(
+            "Diff analysis complete for {Path}: {Added} added, {Changed} changed, {Removed} removed",
+            normalizedPath, result.Added.Count, result.Changed.Count, result.Removed.Count);
+        return result;
     }
 
     private static List<FileEntry> BuildCarried(
@@ -130,6 +156,7 @@ public class FolderAnalysisService : IFolderAnalysisService, IDisposable
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            _logger.LogWarning(ex, "Failed to save snapshot for {Path}", normalizedPath);
             return true;
         }
     }

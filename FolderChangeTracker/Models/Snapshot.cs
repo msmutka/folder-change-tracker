@@ -1,6 +1,6 @@
 namespace FolderChangeTracker.Models;
 
-public class Snapshot
+public record Snapshot
 {
     public string TrackedPath { get; init; } = string.Empty;
     public DateTimeOffset CapturedAt { get; init; }

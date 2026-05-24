@@ -9,11 +9,13 @@ namespace FolderChangeTracker.Services;
 public class SnapshotRepository : ISnapshotRepository
 {
     private readonly string _dataDirectory;
+    private readonly ILogger<SnapshotRepository> _logger;
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
-    public SnapshotRepository(IOptions<StorageOptions> options, IWebHostEnvironment environment)
+    public SnapshotRepository(IOptions<StorageOptions> options, IWebHostEnvironment environment, ILogger<SnapshotRepository> logger)
     {
         _dataDirectory = Path.Combine(environment.ContentRootPath, options.Value.DataPath);
+        _logger = logger;
         Directory.CreateDirectory(_dataDirectory);
     }
 
@@ -31,6 +33,7 @@ public class SnapshotRepository : ISnapshotRepository
         }
         catch (JsonException)
         {
+            _logger.LogWarning("Snapshot file for {TrackedPath} is corrupted, resetting", trackedPath);
             try { File.Delete(filePath); } catch { }
             return (null, true);
         }
@@ -60,9 +63,15 @@ public class SnapshotRepository : ISnapshotRepository
         try
         {
             if (File.Exists(filePath))
+            {
                 File.Delete(filePath);
+                _logger.LogInformation("Deleted snapshot for {TrackedPath}", trackedPath);
+            }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "Failed to delete snapshot for {TrackedPath}", trackedPath);
+        }
         return Task.CompletedTask;
     }
 

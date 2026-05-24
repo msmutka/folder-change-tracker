@@ -1,6 +1,6 @@
 namespace FolderChangeTracker.Models;
 
-public class FileEntry
+public record FileEntry
 {
     public string RelativePath { get; init; } = string.Empty;
     public bool IsDirectory { get; init; }

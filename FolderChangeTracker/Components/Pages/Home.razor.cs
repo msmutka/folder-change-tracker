@@ -9,6 +9,9 @@ public partial class Home : IAsyncDisposable
     [Inject]
     private IFolderAnalysisService AnalysisService { get; set; } = default!;
 
+    [Inject]
+    private ILogger<Home> Logger { get; set; } = default!;
+
     private string path = string.Empty;
     private AnalysisResult? result;
     private bool isLoading;
@@ -33,10 +36,12 @@ public partial class Home : IAsyncDisposable
         }
         catch (OperationCanceledException)
         {
+            Logger.LogDebug("Analysis cancelled by user for path {Path}", path);
             wasCancelled = true;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            Logger.LogError(ex, "Unexpected error during analysis of {Path}", path);
             unexpectedError = "An unexpected error occurred. Please try again.";
         }
         finally

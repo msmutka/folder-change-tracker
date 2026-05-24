@@ -1,5 +1,6 @@
 using FolderChangeTracker.Models;
 using FolderChangeTracker.Services;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
 namespace FolderChangeTracker.Tests;
@@ -19,7 +20,7 @@ public class FolderAnalysisServiceTests : IDisposable
         _repository.Setup(r => r.SaveAsync(It.IsAny<Snapshot>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
         _repository.Setup(r => r.DeleteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
 
-        _sut = new FolderAnalysisService(_repository.Object);
+        _sut = new FolderAnalysisService(_repository.Object, NullLogger<FolderAnalysisService>.Instance);
     }
 
     public void Dispose()
