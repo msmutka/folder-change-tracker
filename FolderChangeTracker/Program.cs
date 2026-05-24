@@ -4,6 +4,7 @@ using FolderChangeTracker.Services;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton<ISnapshotRepository, SnapshotRepository>();
+builder.Services.AddSingleton<IFolderAnalysisService, FolderAnalysisService>();
 
 
 // Add services to the container.

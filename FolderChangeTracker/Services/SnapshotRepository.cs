@@ -2,8 +2,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using FolderChangeTracker.Models;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.Extensions.Configuration;
 
 namespace FolderChangeTracker.Services;
 
