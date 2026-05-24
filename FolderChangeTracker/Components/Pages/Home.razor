@@ -37,143 +37,162 @@
         <div class="alert alert-info">Analysis cancelled.</div>
     }
 
-    @if (result != null)
+    @if (result is FailureResult failure)
     {
-        @if (result.SnapshotWasReset)
+        <div class="alert alert-danger">@failure.ErrorMessage</div>
+    }
+    else if (result is InitialSnapshotResult initial)
+    {
+        @if (initial.SnapshotWasReset)
         {
             <div class="alert alert-warning mb-3">
                 <strong>Warning:</strong> The previous snapshot for this path was corrupted and has been discarded. Tracking history has been reset.
             </div>
         }
 
-        @if (!result.IsSuccess)
+        @if (initial.SnapshotSaveFailed)
         {
-            <div class="alert alert-danger">@result.ErrorMessage</div>
+            <div class="alert alert-warning mb-3">
+                <strong>Warning:</strong> Analysis completed but the snapshot could not be saved (check disk space or permissions). The next analysis will compare against the previous baseline — this result will not be carried forward.
+            </div>
         }
-        else if (result.IsInitialSnapshot)
-        {
-            <div class="card">
-                <div class="card-header"><strong>Initial Snapshot</strong></div>
-                <div class="card-body">
-                    <p class="text-muted mb-3">This is the initial state of the folder — not a change report.</p>
-                    <table class="table table-sm table-striped mb-0">
-                        <thead>
+
+        <div class="card">
+            <div class="card-header"><strong>Initial Snapshot</strong></div>
+            <div class="card-body">
+                <p class="text-muted mb-3">This is the initial state of the folder — not a change report.</p>
+                <table class="table table-sm table-striped mb-0">
+                    <thead>
+                        <tr>
+                            <th>Path</th>
+                            <th>Type</th>
+                            <th>Version</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var entry in initial.AllEntries)
+                        {
                             <tr>
-                                <th>Path</th>
-                                <th>Type</th>
-                                <th>Version</th>
+                                <td class="font-monospace">@entry.RelativePath</td>
+                                <td>
+                                    @if (entry.IsDirectory)
+                                    {
+                                        <span class="badge bg-secondary">Folder</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-light text-dark border">File</span>
+                                    }
+                                </td>
+                                <td>@(entry.IsDirectory ? "—" : $"v{entry.Version}")</td>
                             </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var entry in result.AllEntries)
-                            {
-                                <tr>
-                                    <td class="font-monospace">@entry.RelativePath</td>
-                                    <td>
-                                        @if (entry.IsDirectory)
-                                        {
-                                            <span class="badge bg-secondary">Folder</span>
-                                        }
-                                        else
-                                        {
-                                            <span class="badge bg-light text-dark border">File</span>
-                                        }
-                                    </td>
-                                    <td>@(entry.IsDirectory ? "—" : $"v{entry.Version}")</td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
-                </div>
+                        }
+                    </tbody>
+                </table>
             </div>
-        }
-        else
-        {
-            @if (result.Added.Count == 0 && result.Changed.Count == 0 && result.Removed.Count == 0 && result.UnreadableFiles.Count == 0)
-            {
-                <div class="alert alert-success">No changes detected.</div>
-            }
+        </div>
 
-            <div class="d-flex flex-column gap-3">
-                <div class="card border-success">
-                    <div class="card-header bg-success text-white"><strong>Added</strong></div>
-                    <div class="card-body">
-                        @if (result.Added.Count == 0)
-                        {
-                            <p class="text-muted mb-0">None</p>
-                        }
-                        else
-                        {
-                            <ul class="list-group list-group-flush">
-                                @foreach (var entry in result.Added)
-                                {
-                                    <li class="list-group-item px-0">
-                                        <span class="font-monospace">@entry.RelativePath</span>
-                                        @if (entry.IsDirectory)
-                                        {
-                                            <span class="badge bg-secondary ms-2">Folder</span>
-                                        }
-                                    </li>
-                                }
-                            </ul>
-                        }
-                    </div>
-                </div>
-
-                <div class="card border-warning">
-                    <div class="card-header bg-warning"><strong>Changed</strong></div>
-                    <div class="card-body">
-                        @if (result.Changed.Count == 0)
-                        {
-                            <p class="text-muted mb-0">None</p>
-                        }
-                        else
-                        {
-                            <ul class="list-group list-group-flush">
-                                @foreach (var entry in result.Changed)
-                                {
-                                    <li class="list-group-item px-0">
-                                        <span class="font-monospace">@entry.RelativePath</span>
-                                        <span class="text-muted ms-2">v@(entry.Version - 1) → v@(entry.Version)</span>
-                                    </li>
-                                }
-                            </ul>
-                        }
-                    </div>
-                </div>
-
-                <div class="card border-danger">
-                    <div class="card-header bg-danger text-white"><strong>Removed</strong></div>
-                    <div class="card-body">
-                        @if (result.Removed.Count == 0)
-                        {
-                            <p class="text-muted mb-0">None</p>
-                        }
-                        else
-                        {
-                            <ul class="list-group list-group-flush">
-                                @foreach (var entry in result.Removed)
-                                {
-                                    <li class="list-group-item px-0">
-                                        <span class="font-monospace">@entry.RelativePath</span>
-                                        @if (entry.IsDirectory)
-                                        {
-                                            <span class="badge bg-secondary ms-2">Folder</span>
-                                        }
-                                    </li>
-                                }
-                            </ul>
-                        }
-                    </div>
-                </div>
-            </div>
-        }
-
-        @if (result.UnreadableFiles.Count > 0)
+        @if (initial.UnreadableFiles.Count > 0)
         {
             <div class="alert alert-warning mt-3">
-                <strong>Warning:</strong> @result.UnreadableFiles.Count file(s) could not be read:
-                @string.Join(", ", result.UnreadableFiles)
+                <strong>Warning:</strong> @initial.UnreadableFiles.Count file(s) could not be read:
+                @string.Join(", ", initial.UnreadableFiles)
+            </div>
+        }
+    }
+    else if (result is DiffResult diff)
+    {
+        @if (diff.SnapshotSaveFailed)
+        {
+            <div class="alert alert-warning mb-3">
+                <strong>Warning:</strong> Analysis completed but the snapshot could not be saved (check disk space or permissions). The next analysis will compare against the previous baseline — this result will not be carried forward.
+            </div>
+        }
+
+        @if (diff.Added.Count == 0 && diff.Changed.Count == 0 && diff.Removed.Count == 0 && diff.UnreadableFiles.Count == 0)
+        {
+            <div class="alert alert-success">No changes detected.</div>
+        }
+
+        <div class="d-flex flex-column gap-3">
+            <div class="card border-success">
+                <div class="card-header bg-success text-white"><strong>Added</strong></div>
+                <div class="card-body">
+                    @if (diff.Added.Count == 0)
+                    {
+                        <p class="text-muted mb-0">None</p>
+                    }
+                    else
+                    {
+                        <ul class="list-group list-group-flush">
+                            @foreach (var entry in diff.Added)
+                            {
+                                <li class="list-group-item px-0">
+                                    <span class="font-monospace">@entry.RelativePath</span>
+                                    @if (entry.IsDirectory)
+                                    {
+                                        <span class="badge bg-secondary ms-2">Folder</span>
+                                    }
+                                </li>
+                            }
+                        </ul>
+                    }
+                </div>
+            </div>
+
+            <div class="card border-warning">
+                <div class="card-header bg-warning"><strong>Changed</strong></div>
+                <div class="card-body">
+                    @if (diff.Changed.Count == 0)
+                    {
+                        <p class="text-muted mb-0">None</p>
+                    }
+                    else
+                    {
+                        <ul class="list-group list-group-flush">
+                            @foreach (var entry in diff.Changed)
+                            {
+                                <li class="list-group-item px-0">
+                                    <span class="font-monospace">@entry.RelativePath</span>
+                                    <span class="text-muted ms-2">v@(entry.Version - 1) → v@(entry.Version)</span>
+                                </li>
+                            }
+                        </ul>
+                    }
+                </div>
+            </div>
+
+            <div class="card border-danger">
+                <div class="card-header bg-danger text-white"><strong>Removed</strong></div>
+                <div class="card-body">
+                    @if (diff.Removed.Count == 0)
+                    {
+                        <p class="text-muted mb-0">None</p>
+                    }
+                    else
+                    {
+                        <ul class="list-group list-group-flush">
+                            @foreach (var entry in diff.Removed)
+                            {
+                                <li class="list-group-item px-0">
+                                    <span class="font-monospace">@entry.RelativePath</span>
+                                    @if (entry.IsDirectory)
+                                    {
+                                        <span class="badge bg-secondary ms-2">Folder</span>
+                                    }
+                                </li>
+                            }
+                        </ul>
+                    }
+                </div>
+            </div>
+        </div>
+
+        @if (diff.UnreadableFiles.Count > 0)
+        {
+            <div class="alert alert-warning mt-3">
+                <strong>Warning:</strong> @diff.UnreadableFiles.Count file(s) could not be read:
+                @string.Join(", ", diff.UnreadableFiles)
             </div>
         }
     }

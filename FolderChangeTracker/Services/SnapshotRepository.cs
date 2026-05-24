@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using FolderChangeTracker.Models;
+using Microsoft.Extensions.Options;
 
 namespace FolderChangeTracker.Services;
 
@@ -10,10 +11,9 @@ public class SnapshotRepository : ISnapshotRepository
     private readonly string _dataDirectory;
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
-    public SnapshotRepository(IConfiguration configuration, IWebHostEnvironment environment)
+    public SnapshotRepository(IOptions<StorageOptions> options, IWebHostEnvironment environment)
     {
-        var dataPath = configuration["Storage:DataPath"] ?? "data";
-        _dataDirectory = Path.Combine(environment.ContentRootPath, dataPath);
+        _dataDirectory = Path.Combine(environment.ContentRootPath, options.Value.DataPath);
         Directory.CreateDirectory(_dataDirectory);
     }
 
@@ -23,10 +23,11 @@ public class SnapshotRepository : ISnapshotRepository
         if (!File.Exists(filePath))
             return (null, false);
 
-        var json = await File.ReadAllTextAsync(filePath, ct);
         try
         {
-            return (JsonSerializer.Deserialize<Snapshot>(json, JsonOptions), false);
+            await using var stream = File.OpenRead(filePath);
+            var snapshot = await JsonSerializer.DeserializeAsync<Snapshot>(stream, JsonOptions, ct);
+            return (snapshot, false);
         }
         catch (JsonException)
         {

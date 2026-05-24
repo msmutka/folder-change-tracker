@@ -8,7 +8,7 @@ public class FolderAnalysisServiceTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly Mock<ISnapshotRepository> _repository;
-    private readonly FolderAnalysisService _sut;
+    private readonly IFolderAnalysisService _sut;
 
     public FolderAnalysisServiceTests()
     {
@@ -22,7 +22,11 @@ public class FolderAnalysisServiceTests : IDisposable
         _sut = new FolderAnalysisService(_repository.Object);
     }
 
-    public void Dispose() => Directory.Delete(_tempDir, recursive: true);
+    public void Dispose()
+    {
+        (_sut as IDisposable)?.Dispose();
+        Directory.Delete(_tempDir, recursive: true);
+    }
 
     // --- helpers ---
 
@@ -53,19 +57,17 @@ public class FolderAnalysisServiceTests : IDisposable
     [InlineData("   ")]
     public async Task AnalyzeAsync_EmptyOrWhitespacePath_ReturnsFailure(string path)
     {
-        var result = await _sut.AnalyzeAsync(path);
+        var failure = Assert.IsType<FailureResult>(await _sut.AnalyzeAsync(path));
 
-        Assert.False(result.IsSuccess);
-        Assert.NotEmpty(result.ErrorMessage!);
+        Assert.NotEmpty(failure.ErrorMessage);
     }
 
     [Fact]
     public async Task AnalyzeAsync_NonExistentPath_ReturnsFailureAndDeletesSnapshot()
     {
-        var result = await _sut.AnalyzeAsync(@"C:\this\path\does\not\exist\abc123xyz");
+        Assert.IsType<FailureResult>(await _sut.AnalyzeAsync(@"C:\this\path\does\not\exist\abc123xyz"));
 
-        Assert.False(result.IsSuccess);
-        _repository.Verify(r => r.DeleteAsync(It.IsAny<string>()), Times.Once);
+        _repository.Verify(r => r.DeleteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -73,10 +75,20 @@ public class FolderAnalysisServiceTests : IDisposable
     {
         CreateFile("somefile.txt");
 
-        var result = await _sut.AnalyzeAsync(Path.Combine(_tempDir, "somefile.txt"));
+        var failure = Assert.IsType<FailureResult>(await _sut.AnalyzeAsync(Path.Combine(_tempDir, "somefile.txt")));
 
-        Assert.False(result.IsSuccess);
-        Assert.Contains("file", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("file", failure.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("relative\\path")]
+    [InlineData("../parent")]
+    [InlineData(".")]
+    public async Task AnalyzeAsync_RelativePath_ReturnsFailure(string path)
+    {
+        var failure = Assert.IsType<FailureResult>(await _sut.AnalyzeAsync(path));
+
+        Assert.Contains("absolute", failure.ErrorMessage, StringComparison.OrdinalIgnoreCase);
     }
 
     // --- initial snapshot ---
@@ -89,13 +101,12 @@ public class FolderAnalysisServiceTests : IDisposable
         CreateSubdir("subdir");
         SetupNoPreviousSnapshot();
 
-        var result = await _sut.AnalyzeAsync(_tempDir);
+        var initial = Assert.IsType<InitialSnapshotResult>(await _sut.AnalyzeAsync(_tempDir));
 
-        Assert.True(result.IsInitialSnapshot);
-        Assert.Equal(3, result.AllEntries.Count);
-        Assert.Contains(result.AllEntries, e => e.RelativePath == "file1.txt" && !e.IsDirectory);
-        Assert.Contains(result.AllEntries, e => e.RelativePath == "file2.txt" && !e.IsDirectory);
-        Assert.Contains(result.AllEntries, e => e.RelativePath == "subdir" && e.IsDirectory);
+        Assert.Equal(3, initial.AllEntries.Count);
+        Assert.Contains(initial.AllEntries, e => e.RelativePath == "file1.txt" && !e.IsDirectory);
+        Assert.Contains(initial.AllEntries, e => e.RelativePath == "file2.txt" && !e.IsDirectory);
+        Assert.Contains(initial.AllEntries, e => e.RelativePath == "subdir" && e.IsDirectory);
     }
 
     [Fact]
@@ -105,9 +116,9 @@ public class FolderAnalysisServiceTests : IDisposable
         System.IO.File.WriteAllText(Path.Combine(_tempDir, "sub", "nested.txt"), "content");
         SetupNoPreviousSnapshot();
 
-        var result = await _sut.AnalyzeAsync(_tempDir);
+        var initial = Assert.IsType<InitialSnapshotResult>(await _sut.AnalyzeAsync(_tempDir));
 
-        Assert.Contains(result.AllEntries, e => e.RelativePath == Path.Combine("sub", "nested.txt") && !e.IsDirectory);
+        Assert.Contains(initial.AllEntries, e => e.RelativePath == Path.Combine("sub", "nested.txt") && !e.IsDirectory);
     }
 
     [Fact]
@@ -116,9 +127,9 @@ public class FolderAnalysisServiceTests : IDisposable
         CreateFile("file.txt");
         SetupNoPreviousSnapshot();
 
-        var result = await _sut.AnalyzeAsync(_tempDir);
+        var initial = Assert.IsType<InitialSnapshotResult>(await _sut.AnalyzeAsync(_tempDir));
 
-        Assert.Equal(1, result.AllEntries.Single(e => !e.IsDirectory).Version);
+        Assert.Equal(1, initial.AllEntries.Single(e => !e.IsDirectory).Version);
     }
 
     // --- diff: no changes ---
@@ -136,14 +147,11 @@ public class FolderAnalysisServiceTests : IDisposable
             .Returns(Task.CompletedTask);
 
         await _sut.AnalyzeAsync(_tempDir);
-        var result = await _sut.AnalyzeAsync(_tempDir);
+        var diff = Assert.IsType<DiffResult>(await _sut.AnalyzeAsync(_tempDir));
 
-        Assert.True(result.IsSuccess);
-        Assert.False(result.IsInitialSnapshot);
-        Assert.Empty(result.Added);
-        Assert.Empty(result.Changed);
-        Assert.Empty(result.Removed);
-        Assert.Empty(result.AllEntries);
+        Assert.Empty(diff.Added);
+        Assert.Empty(diff.Changed);
+        Assert.Empty(diff.Removed);
     }
 
     // --- diff: additions ---
@@ -154,12 +162,12 @@ public class FolderAnalysisServiceTests : IDisposable
         SetupPreviousSnapshot();
         CreateFile("new.txt");
 
-        var result = await _sut.AnalyzeAsync(_tempDir);
+        var diff = Assert.IsType<DiffResult>(await _sut.AnalyzeAsync(_tempDir));
 
-        Assert.Single(result.Added);
-        Assert.Equal("new.txt", result.Added[0].RelativePath);
-        Assert.Empty(result.Changed);
-        Assert.Empty(result.Removed);
+        Assert.Single(diff.Added);
+        Assert.Equal("new.txt", diff.Added[0].RelativePath);
+        Assert.Empty(diff.Changed);
+        Assert.Empty(diff.Removed);
     }
 
     [Fact]
@@ -168,11 +176,11 @@ public class FolderAnalysisServiceTests : IDisposable
         SetupPreviousSnapshot();
         CreateSubdir("newdir");
 
-        var result = await _sut.AnalyzeAsync(_tempDir);
+        var diff = Assert.IsType<DiffResult>(await _sut.AnalyzeAsync(_tempDir));
 
-        Assert.Single(result.Added);
-        Assert.Equal("newdir", result.Added[0].RelativePath);
-        Assert.True(result.Added[0].IsDirectory);
+        Assert.Single(diff.Added);
+        Assert.Equal("newdir", diff.Added[0].RelativePath);
+        Assert.True(diff.Added[0].IsDirectory);
     }
 
     // --- diff: removals ---
@@ -182,12 +190,12 @@ public class FolderAnalysisServiceTests : IDisposable
     {
         SetupPreviousSnapshot(Entry("gone.txt", "any_hash"));
 
-        var result = await _sut.AnalyzeAsync(_tempDir);
+        var diff = Assert.IsType<DiffResult>(await _sut.AnalyzeAsync(_tempDir));
 
-        Assert.Single(result.Removed);
-        Assert.Equal("gone.txt", result.Removed[0].RelativePath);
-        Assert.Empty(result.Added);
-        Assert.Empty(result.Changed);
+        Assert.Single(diff.Removed);
+        Assert.Equal("gone.txt", diff.Removed[0].RelativePath);
+        Assert.Empty(diff.Added);
+        Assert.Empty(diff.Changed);
     }
 
     [Fact]
@@ -195,11 +203,11 @@ public class FolderAnalysisServiceTests : IDisposable
     {
         SetupPreviousSnapshot(DirEntry("olddir"));
 
-        var result = await _sut.AnalyzeAsync(_tempDir);
+        var diff = Assert.IsType<DiffResult>(await _sut.AnalyzeAsync(_tempDir));
 
-        Assert.Single(result.Removed);
-        Assert.Equal("olddir", result.Removed[0].RelativePath);
-        Assert.True(result.Removed[0].IsDirectory);
+        Assert.Single(diff.Removed);
+        Assert.Equal("olddir", diff.Removed[0].RelativePath);
+        Assert.True(diff.Removed[0].IsDirectory);
     }
 
     // --- diff: modifications ---
@@ -210,12 +218,12 @@ public class FolderAnalysisServiceTests : IDisposable
         CreateFile("file.txt", "current content");
         SetupPreviousSnapshot(Entry("file.txt", "STALE_HASH_THAT_WONT_MATCH", version: 1));
 
-        var result = await _sut.AnalyzeAsync(_tempDir);
+        var diff = Assert.IsType<DiffResult>(await _sut.AnalyzeAsync(_tempDir));
 
-        Assert.Single(result.Changed);
-        Assert.Equal("file.txt", result.Changed[0].RelativePath);
-        Assert.Empty(result.Added);
-        Assert.Empty(result.Removed);
+        Assert.Single(diff.Changed);
+        Assert.Equal("file.txt", diff.Changed[0].RelativePath);
+        Assert.Empty(diff.Added);
+        Assert.Empty(diff.Removed);
     }
 
     [Fact]
@@ -224,9 +232,9 @@ public class FolderAnalysisServiceTests : IDisposable
         CreateFile("file.txt", "current content");
         SetupPreviousSnapshot(Entry("file.txt", "STALE_HASH_THAT_WONT_MATCH", version: 3));
 
-        var result = await _sut.AnalyzeAsync(_tempDir);
+        var diff = Assert.IsType<DiffResult>(await _sut.AnalyzeAsync(_tempDir));
 
-        Assert.Equal(4, result.Changed[0].Version);
+        Assert.Equal(4, diff.Changed[0].Version);
     }
 
     [Fact]
@@ -235,11 +243,11 @@ public class FolderAnalysisServiceTests : IDisposable
         CreateSubdir("subdir");
         SetupPreviousSnapshot(DirEntry("subdir"));
 
-        var result = await _sut.AnalyzeAsync(_tempDir);
+        var diff = Assert.IsType<DiffResult>(await _sut.AnalyzeAsync(_tempDir));
 
-        Assert.Empty(result.Changed);
-        Assert.Empty(result.Added);
-        Assert.Empty(result.Removed);
+        Assert.Empty(diff.Changed);
+        Assert.Empty(diff.Added);
+        Assert.Empty(diff.Removed);
     }
 
     // --- unreadable files ---
@@ -252,10 +260,9 @@ public class FolderAnalysisServiceTests : IDisposable
         SetupNoPreviousSnapshot();
 
         using var lockedStream = new FileStream(filePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-        var result = await _sut.AnalyzeAsync(_tempDir);
+        var initial = Assert.IsType<InitialSnapshotResult>(await _sut.AnalyzeAsync(_tempDir));
 
-        Assert.True(result.IsSuccess);
-        Assert.Contains("locked.txt", result.UnreadableFiles);
+        Assert.Contains("locked.txt", initial.UnreadableFiles);
     }
 
     [Fact]
@@ -266,10 +273,9 @@ public class FolderAnalysisServiceTests : IDisposable
         SetupPreviousSnapshot(Entry("locked.txt", "some_hash"));
 
         using var lockedStream = new FileStream(filePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-        var result = await _sut.AnalyzeAsync(_tempDir);
+        var diff = Assert.IsType<DiffResult>(await _sut.AnalyzeAsync(_tempDir));
 
-        Assert.True(result.IsSuccess);
-        Assert.Empty(result.Removed);
-        Assert.Contains("locked.txt", result.UnreadableFiles);
+        Assert.Empty(diff.Removed);
+        Assert.Contains("locked.txt", diff.UnreadableFiles);
     }
 }

@@ -4,10 +4,11 @@ using FolderChangeTracker.Models;
 
 namespace FolderChangeTracker.Services;
 
-public class FolderAnalysisService : IFolderAnalysisService
+public class FolderAnalysisService : IFolderAnalysisService, IDisposable
 {
     private const int MaxFiles = 100;
     private const long MaxFileSizeBytes = 50L * 1024 * 1024;
+    private const int ScanParallelism = 4;
 
     private readonly ISnapshotRepository _repository;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new(StringComparer.OrdinalIgnoreCase);
@@ -22,29 +23,32 @@ public class FolderAnalysisService : IFolderAnalysisService
         if (string.IsNullOrWhiteSpace(path))
             return Failure("Path cannot be empty.");
 
+        var trimmed = path.Trim();
+        if (!Path.IsPathFullyQualified(trimmed))
+            return Failure("Path must be an absolute path (e.g. C:\\Users\\...). Relative paths are not accepted.");
+
         string normalizedPath;
         try
         {
-            normalizedPath = Path.GetFullPath(path.Trim());
+            normalizedPath = Path.GetFullPath(trimmed);
         }
         catch (Exception)
         {
             return Failure("Path is invalid.");
         }
 
-        if (!Directory.Exists(normalizedPath))
-        {
-            if (File.Exists(normalizedPath))
-                return Failure("The specified path points to a file, not a folder.");
-
-            await _repository.DeleteAsync(normalizedPath, ct);
-            return Failure("Folder does not exist or is not accessible.");
-        }
+        if (File.Exists(normalizedPath))
+            return Failure("The specified path points to a file, not a folder.");
 
         var semaphore = _locks.GetOrAdd(normalizedPath, _ => new SemaphoreSlim(1, 1));
         await semaphore.WaitAsync(ct);
         try
         {
+            if (!Directory.Exists(normalizedPath))
+            {
+                await _repository.DeleteAsync(normalizedPath, ct);
+                return Failure("Folder does not exist or is not accessible.");
+            }
             return await AnalyzeLockedAsync(normalizedPath, ct);
         }
         finally
@@ -88,13 +92,11 @@ public class FolderAnalysisService : IFolderAnalysisService
         var unreadableSet = new HashSet<string>(unreadable, StringComparer.OrdinalIgnoreCase);
         var carried = BuildCarried(previous, previousByPath, currentEntries, unreadableSet);
 
-        var saveError = await TrySaveSnapshotAsync(normalizedPath, currentEntries, carried, ct);
-        if (saveError != null)
-            return saveError;
+        var saveFailed = await TrySaveSnapshotAsync(normalizedPath, currentEntries, carried, ct);
 
         return previous == null
-            ? BuildInitialResult(currentEntries, unreadable, snapshotWasReset)
-            : BuildDiffResult(previous, currentEntries, previousByPath, unreadableSet, unreadable);
+            ? BuildInitialResult(currentEntries, unreadable, snapshotWasReset, saveFailed)
+            : BuildDiffResult(previous, currentEntries, previousByPath, unreadableSet, unreadable, saveFailed);
     }
 
     private static List<FileEntry> BuildCarried(
@@ -110,7 +112,11 @@ public class FolderAnalysisService : IFolderAnalysisService
             .ToList();
     }
 
-    private async Task<AnalysisResult?> TrySaveSnapshotAsync(string normalizedPath, List<FileEntry> currentEntries, List<FileEntry> carried, CancellationToken ct)
+    private async Task<bool> TrySaveSnapshotAsync(
+        string normalizedPath,
+        List<FileEntry> currentEntries,
+        List<FileEntry> carried,
+        CancellationToken ct)
     {
         try
         {
@@ -120,30 +126,34 @@ public class FolderAnalysisService : IFolderAnalysisService
                 CapturedAt = DateTimeOffset.UtcNow,
                 Entries = currentEntries.Concat(carried).ToList()
             }, ct);
-            return null;
+            return false;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return Failure("Analysis complete but snapshot could not be saved. Check disk space or permissions.");
+            return true;
         }
     }
 
-    private static AnalysisResult BuildInitialResult(List<FileEntry> currentEntries, List<string> unreadable, bool snapshotWasReset) =>
+    private static InitialSnapshotResult BuildInitialResult(
+        List<FileEntry> currentEntries,
+        List<string> unreadable,
+        bool snapshotWasReset,
+        bool saveFailed) =>
         new()
         {
-            IsSuccess = true,
-            IsInitialSnapshot = true,
-            SnapshotWasReset = snapshotWasReset,
             AllEntries = currentEntries,
-            UnreadableFiles = unreadable
+            UnreadableFiles = unreadable,
+            SnapshotWasReset = snapshotWasReset,
+            SnapshotSaveFailed = saveFailed
         };
 
-    private static AnalysisResult BuildDiffResult(
+    private static DiffResult BuildDiffResult(
         Snapshot previous,
         List<FileEntry> currentEntries,
         Dictionary<string, FileEntry> previousByPath,
         HashSet<string> unreadableSet,
-        List<string> unreadable)
+        List<string> unreadable,
+        bool saveFailed)
     {
         var currentByPath = currentEntries.ToDictionary(e => e.RelativePath, StringComparer.OrdinalIgnoreCase);
 
@@ -155,9 +165,9 @@ public class FolderAnalysisService : IFolderAnalysisService
             .Where(e => !e.IsDirectory && previousByPath.TryGetValue(e.RelativePath, out var prev) && prev.Hash != e.Hash)
             .ToList();
 
-        return new AnalysisResult
+        return new DiffResult
         {
-            IsSuccess = true,
+            SnapshotSaveFailed = saveFailed,
             Added = added,
             Changed = changed,
             Removed = removed,
@@ -165,31 +175,35 @@ public class FolderAnalysisService : IFolderAnalysisService
         };
     }
 
-    private static async Task<(List<(string RelPath, bool IsDir, string? Hash)> Entries, List<string> Unreadable)> ScanAsync(string dirPath, string[] entryPaths, CancellationToken ct)
+    private static async Task<(List<(string RelPath, bool IsDir, string? Hash)> Entries, List<string> Unreadable)> ScanAsync(
+        string dirPath,
+        string[] entryPaths,
+        CancellationToken ct)
     {
-        var entries = new List<(string, bool, string?)>();
-        var unreadable = new List<string>();
+        var entries = new ConcurrentBag<(string RelPath, bool IsDir, string? Hash)>();
+        var unreadable = new ConcurrentBag<string>();
 
-        foreach (var entryPath in entryPaths)
-        {
-            ct.ThrowIfCancellationRequested();
-
-            var relativePath = Path.GetRelativePath(dirPath, entryPath);
-
-            if (Directory.Exists(entryPath))
+        await Parallel.ForEachAsync(
+            entryPaths,
+            new ParallelOptions { MaxDegreeOfParallelism = ScanParallelism, CancellationToken = ct },
+            async (entryPath, loopCt) =>
             {
-                entries.Add((relativePath, true, null));
-                continue;
-            }
+                var relativePath = Path.GetRelativePath(dirPath, entryPath);
 
-            var (hash, isUnreadable) = await TryHashFileAsync(entryPath, ct);
-            if (isUnreadable)
-                unreadable.Add(relativePath);
-            else
-                entries.Add((relativePath, false, hash));
-        }
+                if (Directory.Exists(entryPath))
+                {
+                    entries.Add((relativePath, true, null));
+                    return;
+                }
 
-        return (entries, unreadable);
+                var (hash, isUnreadable) = await TryHashFileAsync(entryPath, loopCt);
+                if (isUnreadable)
+                    unreadable.Add(relativePath);
+                else
+                    entries.Add((relativePath, false, hash));
+            });
+
+        return ([..entries], [..unreadable]);
     }
 
     private static async Task<(string? Hash, bool IsUnreadable)> TryHashFileAsync(string entryPath, CancellationToken ct)
@@ -239,6 +253,12 @@ public class FolderAnalysisService : IFolderAnalysisService
         return result;
     }
 
-    private static AnalysisResult Failure(string message) =>
-        new() { IsSuccess = false, ErrorMessage = message };
+    private static FailureResult Failure(string message) => new(message);
+
+    public void Dispose()
+    {
+        foreach (var semaphore in _locks.Values)
+            semaphore.Dispose();
+        _locks.Clear();
+    }
 }

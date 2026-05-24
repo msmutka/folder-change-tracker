@@ -1,11 +1,12 @@
+using FolderChangeTracker;
 using FolderChangeTracker.Components;
 using FolderChangeTracker.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Services.Configure<StorageOptions>(builder.Configuration.GetSection("Storage"));
 builder.Services.AddSingleton<ISnapshotRepository, SnapshotRepository>();
 builder.Services.AddSingleton<IFolderAnalysisService, FolderAnalysisService>();
-
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
