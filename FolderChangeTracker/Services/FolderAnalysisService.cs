@@ -17,7 +17,7 @@ public class FolderAnalysisService : IFolderAnalysisService
         _repository = repository;
     }
 
-    public async Task<AnalysisResult> AnalyzeAsync(string path)
+    public async Task<AnalysisResult> AnalyzeAsync(string path, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(path))
             return Failure("Path cannot be empty.");
@@ -37,15 +37,15 @@ public class FolderAnalysisService : IFolderAnalysisService
             if (File.Exists(normalizedPath))
                 return Failure("The specified path points to a file, not a folder.");
 
-            await _repository.DeleteAsync(normalizedPath);
+            await _repository.DeleteAsync(normalizedPath, ct);
             return Failure("Folder does not exist or is not accessible.");
         }
 
         var semaphore = _locks.GetOrAdd(normalizedPath, _ => new SemaphoreSlim(1, 1));
-        await semaphore.WaitAsync();
+        await semaphore.WaitAsync(ct);
         try
         {
-            return await AnalyzeLockedAsync(normalizedPath);
+            return await AnalyzeLockedAsync(normalizedPath, ct);
         }
         finally
         {
@@ -53,7 +53,7 @@ public class FolderAnalysisService : IFolderAnalysisService
         }
     }
 
-    private async Task<AnalysisResult> AnalyzeLockedAsync(string normalizedPath)
+    private async Task<AnalysisResult> AnalyzeLockedAsync(string normalizedPath, CancellationToken ct)
     {
         string[] entryPaths;
         try
@@ -73,14 +73,14 @@ public class FolderAnalysisService : IFolderAnalysisService
         List<string> unreadable;
         try
         {
-            (scanned, unreadable) = await ScanAsync(normalizedPath, entryPaths);
+            (scanned, unreadable) = await ScanAsync(normalizedPath, entryPaths, ct);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return Failure($"Folder became inaccessible during analysis: {ex.Message}");
         }
 
-        var (previous, snapshotWasReset) = await _repository.LoadAsync(normalizedPath);
+        var (previous, snapshotWasReset) = await _repository.LoadAsync(normalizedPath, ct);
         var previousByPath = previous?.Entries.ToDictionary(e => e.RelativePath, StringComparer.OrdinalIgnoreCase)
                              ?? new Dictionary<string, FileEntry>(StringComparer.OrdinalIgnoreCase);
 
@@ -88,7 +88,7 @@ public class FolderAnalysisService : IFolderAnalysisService
         var unreadableSet = new HashSet<string>(unreadable, StringComparer.OrdinalIgnoreCase);
         var carried = BuildCarried(previous, previousByPath, currentEntries, unreadableSet);
 
-        var saveError = await TrySaveSnapshotAsync(normalizedPath, currentEntries, carried);
+        var saveError = await TrySaveSnapshotAsync(normalizedPath, currentEntries, carried, ct);
         if (saveError != null)
             return saveError;
 
@@ -110,7 +110,7 @@ public class FolderAnalysisService : IFolderAnalysisService
             .ToList();
     }
 
-    private async Task<AnalysisResult?> TrySaveSnapshotAsync(string normalizedPath, List<FileEntry> currentEntries, List<FileEntry> carried)
+    private async Task<AnalysisResult?> TrySaveSnapshotAsync(string normalizedPath, List<FileEntry> currentEntries, List<FileEntry> carried, CancellationToken ct)
     {
         try
         {
@@ -119,7 +119,7 @@ public class FolderAnalysisService : IFolderAnalysisService
                 TrackedPath = normalizedPath,
                 CapturedAt = DateTimeOffset.UtcNow,
                 Entries = currentEntries.Concat(carried).ToList()
-            });
+            }, ct);
             return null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -165,13 +165,15 @@ public class FolderAnalysisService : IFolderAnalysisService
         };
     }
 
-    private static async Task<(List<(string RelPath, bool IsDir, string? Hash)> Entries, List<string> Unreadable)> ScanAsync(string dirPath, string[] entryPaths)
+    private static async Task<(List<(string RelPath, bool IsDir, string? Hash)> Entries, List<string> Unreadable)> ScanAsync(string dirPath, string[] entryPaths, CancellationToken ct)
     {
         var entries = new List<(string, bool, string?)>();
         var unreadable = new List<string>();
 
         foreach (var entryPath in entryPaths)
         {
+            ct.ThrowIfCancellationRequested();
+
             var relativePath = Path.GetRelativePath(dirPath, entryPath);
 
             if (Directory.Exists(entryPath))
@@ -180,7 +182,7 @@ public class FolderAnalysisService : IFolderAnalysisService
                 continue;
             }
 
-            var (hash, isUnreadable) = await TryHashFileAsync(entryPath);
+            var (hash, isUnreadable) = await TryHashFileAsync(entryPath, ct);
             if (isUnreadable)
                 unreadable.Add(relativePath);
             else
@@ -190,7 +192,7 @@ public class FolderAnalysisService : IFolderAnalysisService
         return (entries, unreadable);
     }
 
-    private static async Task<(string? Hash, bool IsUnreadable)> TryHashFileAsync(string entryPath)
+    private static async Task<(string? Hash, bool IsUnreadable)> TryHashFileAsync(string entryPath, CancellationToken ct)
     {
         FileInfo fileInfo;
         try
@@ -208,7 +210,7 @@ public class FolderAnalysisService : IFolderAnalysisService
         try
         {
             await using var stream = File.OpenRead(entryPath);
-            var hashBytes = await SHA256.HashDataAsync(stream);
+            var hashBytes = await SHA256.HashDataAsync(stream, ct);
             return (Convert.ToHexString(hashBytes), false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

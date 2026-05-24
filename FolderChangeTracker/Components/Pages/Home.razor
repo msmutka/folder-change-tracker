@@ -9,7 +9,7 @@
     <h1 class="mb-4">Folder Change Tracker</h1>
 
     <div class="input-group mb-4">
-        <input type="text" class="form-control" @bind="path" placeholder="Enter folder path..." />
+        <input type="text" class="form-control" @bind="path" placeholder="Enter folder path..." disabled="@isLoading" />
         <button class="btn btn-primary" @onclick="AnalyseAsync" disabled="@isLoading">
             @if (isLoading)
             {
@@ -21,11 +21,20 @@
                 <span>Analyse</span>
             }
         </button>
+        @if (isLoading)
+        {
+            <button class="btn btn-outline-secondary" @onclick="Cancel">Cancel</button>
+        }
     </div>
 
     @if (unexpectedError != null)
     {
         <div class="alert alert-danger">@unexpectedError</div>
+    }
+
+    @if (wasCancelled)
+    {
+        <div class="alert alert-info">Analysis cancelled.</div>
     }
 
     @if (result != null)

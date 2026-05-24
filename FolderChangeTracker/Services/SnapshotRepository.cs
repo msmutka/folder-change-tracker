@@ -17,13 +17,13 @@ public class SnapshotRepository : ISnapshotRepository
         Directory.CreateDirectory(_dataDirectory);
     }
 
-    public async Task<(Snapshot? Snapshot, bool WasReset)> LoadAsync(string trackedPath)
+    public async Task<(Snapshot? Snapshot, bool WasReset)> LoadAsync(string trackedPath, CancellationToken ct = default)
     {
         var filePath = GetFilePath(trackedPath);
         if (!File.Exists(filePath))
             return (null, false);
 
-        var json = await File.ReadAllTextAsync(filePath);
+        var json = await File.ReadAllTextAsync(filePath, ct);
         try
         {
             return (JsonSerializer.Deserialize<Snapshot>(json, JsonOptions), false);
@@ -35,7 +35,7 @@ public class SnapshotRepository : ISnapshotRepository
         }
     }
 
-    public async Task SaveAsync(Snapshot snapshot)
+    public async Task SaveAsync(Snapshot snapshot, CancellationToken ct = default)
     {
         var filePath = GetFilePath(snapshot.TrackedPath);
         var tempPath = filePath + ".tmp";
@@ -43,7 +43,7 @@ public class SnapshotRepository : ISnapshotRepository
         var json = JsonSerializer.Serialize(snapshot, JsonOptions);
         try
         {
-            await File.WriteAllTextAsync(tempPath, json);
+            await File.WriteAllTextAsync(tempPath, json, ct);
             File.Move(tempPath, filePath, overwrite: true);
         }
         catch
@@ -53,7 +53,7 @@ public class SnapshotRepository : ISnapshotRepository
         }
     }
 
-    public Task DeleteAsync(string trackedPath)
+    public Task DeleteAsync(string trackedPath, CancellationToken ct = default)
     {
         var filePath = GetFilePath(trackedPath);
         try

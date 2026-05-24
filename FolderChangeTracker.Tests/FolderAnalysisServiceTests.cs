@@ -16,8 +16,8 @@ public class FolderAnalysisServiceTests : IDisposable
         Directory.CreateDirectory(_tempDir);
 
         _repository = new Mock<ISnapshotRepository>();
-        _repository.Setup(r => r.SaveAsync(It.IsAny<Snapshot>())).Returns(Task.CompletedTask);
-        _repository.Setup(r => r.DeleteAsync(It.IsAny<string>())).Returns(Task.CompletedTask);
+        _repository.Setup(r => r.SaveAsync(It.IsAny<Snapshot>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        _repository.Setup(r => r.DeleteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
 
         _sut = new FolderAnalysisService(_repository.Object);
     }
@@ -33,11 +33,11 @@ public class FolderAnalysisServiceTests : IDisposable
         => Directory.CreateDirectory(Path.Combine(_tempDir, name));
 
     private void SetupNoPreviousSnapshot()
-        => _repository.Setup(r => r.LoadAsync(It.IsAny<string>()))
+        => _repository.Setup(r => r.LoadAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(((Snapshot?)null, false));
 
     private void SetupPreviousSnapshot(params FileEntry[] entries)
-        => _repository.Setup(r => r.LoadAsync(It.IsAny<string>()))
+        => _repository.Setup(r => r.LoadAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((new Snapshot { TrackedPath = _tempDir, CapturedAt = DateTimeOffset.UtcNow, Entries = [..entries] }, false));
 
     private static FileEntry Entry(string relPath, string hash, int version = 1)
@@ -129,10 +129,10 @@ public class FolderAnalysisServiceTests : IDisposable
         CreateFile("file.txt");
 
         (Snapshot? snapshot, bool wasReset) saved = (null, false);
-        _repository.Setup(r => r.LoadAsync(It.IsAny<string>()))
+        _repository.Setup(r => r.LoadAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .Returns(() => Task.FromResult(saved));
-        _repository.Setup(r => r.SaveAsync(It.IsAny<Snapshot>()))
-            .Callback<Snapshot>(s => saved = (s, false))
+        _repository.Setup(r => r.SaveAsync(It.IsAny<Snapshot>(), It.IsAny<CancellationToken>()))
+            .Callback<Snapshot, CancellationToken>((s, _) => saved = (s, false))
             .Returns(Task.CompletedTask);
 
         await _sut.AnalyzeAsync(_tempDir);

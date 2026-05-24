@@ -7,7 +7,6 @@ builder.Services.AddSingleton<ISnapshotRepository, SnapshotRepository>();
 builder.Services.AddSingleton<IFolderAnalysisService, FolderAnalysisService>();
 
 
-// Add services to the container.
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 

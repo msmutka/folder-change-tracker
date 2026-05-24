@@ -4,5 +4,5 @@ namespace FolderChangeTracker.Services;
 
 public interface IFolderAnalysisService
 {
-    Task<AnalysisResult> AnalyzeAsync(string path);
+    Task<AnalysisResult> AnalyzeAsync(string path, CancellationToken ct = default);
 }
