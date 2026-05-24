@@ -80,38 +80,79 @@ public class FolderAnalysisService : IFolderAnalysisService
             return Failure($"Folder became inaccessible during analysis: {ex.Message}");
         }
 
-        var previous = await _repository.LoadAsync(normalizedPath);
-        var previousByPath = previous?.Entries.ToDictionary(e => e.RelativePath)
-                             ?? new Dictionary<string, FileEntry>();
+        var (previous, snapshotWasReset) = await _repository.LoadAsync(normalizedPath);
+        var previousByPath = previous?.Entries.ToDictionary(e => e.RelativePath, StringComparer.OrdinalIgnoreCase)
+                             ?? new Dictionary<string, FileEntry>(StringComparer.OrdinalIgnoreCase);
 
         var currentEntries = BuildEntries(scanned, previousByPath);
+        var unreadableSet = new HashSet<string>(unreadable, StringComparer.OrdinalIgnoreCase);
+        var carried = BuildCarried(previous, previousByPath, currentEntries, unreadableSet);
 
-        await _repository.SaveAsync(new Snapshot
-        {
-            TrackedPath = normalizedPath,
-            CapturedAt = DateTimeOffset.UtcNow,
-            Entries = currentEntries
-        });
+        var saveError = await TrySaveSnapshotAsync(normalizedPath, currentEntries, carried);
+        if (saveError != null)
+            return saveError;
 
-        if (previous == null)
+        return previous == null
+            ? BuildInitialResult(currentEntries, unreadable, snapshotWasReset)
+            : BuildDiffResult(previous, currentEntries, previousByPath, unreadableSet, unreadable);
+    }
+
+    private static List<FileEntry> BuildCarried(
+        Snapshot? previous,
+        Dictionary<string, FileEntry> previousByPath,
+        List<FileEntry> currentEntries,
+        HashSet<string> unreadableSet)
+    {
+        if (previous == null) return [];
+        var currentPaths = new HashSet<string>(currentEntries.Select(e => e.RelativePath), StringComparer.OrdinalIgnoreCase);
+        return previousByPath.Values
+            .Where(e => unreadableSet.Contains(e.RelativePath) && !currentPaths.Contains(e.RelativePath))
+            .ToList();
+    }
+
+    private async Task<AnalysisResult?> TrySaveSnapshotAsync(string normalizedPath, List<FileEntry> currentEntries, List<FileEntry> carried)
+    {
+        try
         {
-            return new AnalysisResult
+            await _repository.SaveAsync(new Snapshot
             {
-                IsSuccess = true,
-                IsInitialSnapshot = true,
-                AllEntries = currentEntries,
-                UnreadableFiles = unreadable
-            };
+                TrackedPath = normalizedPath,
+                CapturedAt = DateTimeOffset.UtcNow,
+                Entries = currentEntries.Concat(carried).ToList()
+            });
+            return null;
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Failure("Analysis complete but snapshot could not be saved. Check disk space or permissions.");
+        }
+    }
 
-        var currentByPath = currentEntries.ToDictionary(e => e.RelativePath);
+    private static AnalysisResult BuildInitialResult(List<FileEntry> currentEntries, List<string> unreadable, bool snapshotWasReset) =>
+        new()
+        {
+            IsSuccess = true,
+            IsInitialSnapshot = true,
+            SnapshotWasReset = snapshotWasReset,
+            AllEntries = currentEntries,
+            UnreadableFiles = unreadable
+        };
+
+    private static AnalysisResult BuildDiffResult(
+        Snapshot previous,
+        List<FileEntry> currentEntries,
+        Dictionary<string, FileEntry> previousByPath,
+        HashSet<string> unreadableSet,
+        List<string> unreadable)
+    {
+        var currentByPath = currentEntries.ToDictionary(e => e.RelativePath, StringComparer.OrdinalIgnoreCase);
 
         var added = currentEntries.Where(e => !previousByPath.ContainsKey(e.RelativePath)).ToList();
-        var removed = previous.Entries.Where(e => !currentByPath.ContainsKey(e.RelativePath)).ToList();
+        var removed = previous.Entries
+            .Where(e => !currentByPath.ContainsKey(e.RelativePath) && !unreadableSet.Contains(e.RelativePath))
+            .ToList();
         var changed = currentEntries
-            .Where(e => !e.IsDirectory
-                        && previousByPath.TryGetValue(e.RelativePath, out var prev)
-                        && prev.Hash != e.Hash)
+            .Where(e => !e.IsDirectory && previousByPath.TryGetValue(e.RelativePath, out var prev) && prev.Hash != e.Hash)
             .ToList();
 
         return new AnalysisResult
@@ -139,36 +180,41 @@ public class FolderAnalysisService : IFolderAnalysisService
                 continue;
             }
 
-            FileInfo fileInfo;
-            try
-            {
-                fileInfo = new FileInfo(entryPath);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
+            var (hash, isUnreadable) = await TryHashFileAsync(entryPath);
+            if (isUnreadable)
                 unreadable.Add(relativePath);
-                continue;
-            }
-
-            if (fileInfo.Length > MaxFileSizeBytes)
-            {
-                unreadable.Add(relativePath);
-                continue;
-            }
-
-            try
-            {
-                await using var stream = File.OpenRead(entryPath);
-                var hashBytes = await SHA256.HashDataAsync(stream);
-                entries.Add((relativePath, false, Convert.ToHexString(hashBytes)));
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                unreadable.Add(relativePath);
-            }
+            else
+                entries.Add((relativePath, false, hash));
         }
 
         return (entries, unreadable);
+    }
+
+    private static async Task<(string? Hash, bool IsUnreadable)> TryHashFileAsync(string entryPath)
+    {
+        FileInfo fileInfo;
+        try
+        {
+            fileInfo = new FileInfo(entryPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return (null, true);
+        }
+
+        if (fileInfo.Length > MaxFileSizeBytes)
+            return (null, true);
+
+        try
+        {
+            await using var stream = File.OpenRead(entryPath);
+            var hashBytes = await SHA256.HashDataAsync(stream);
+            return (Convert.ToHexString(hashBytes), false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return (null, true);
+        }
     }
 
     private static List<FileEntry> BuildEntries(

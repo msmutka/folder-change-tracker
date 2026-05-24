@@ -17,14 +17,22 @@ public class SnapshotRepository : ISnapshotRepository
         Directory.CreateDirectory(_dataDirectory);
     }
 
-    public async Task<Snapshot?> LoadAsync(string trackedPath)
+    public async Task<(Snapshot? Snapshot, bool WasReset)> LoadAsync(string trackedPath)
     {
         var filePath = GetFilePath(trackedPath);
         if (!File.Exists(filePath))
-            return null;
+            return (null, false);
 
         var json = await File.ReadAllTextAsync(filePath);
-        return JsonSerializer.Deserialize<Snapshot>(json, JsonOptions);
+        try
+        {
+            return (JsonSerializer.Deserialize<Snapshot>(json, JsonOptions), false);
+        }
+        catch (JsonException)
+        {
+            try { File.Delete(filePath); } catch { }
+            return (null, true);
+        }
     }
 
     public async Task SaveAsync(Snapshot snapshot)
@@ -33,15 +41,27 @@ public class SnapshotRepository : ISnapshotRepository
         var tempPath = filePath + ".tmp";
 
         var json = JsonSerializer.Serialize(snapshot, JsonOptions);
-        await File.WriteAllTextAsync(tempPath, json);
-        File.Move(tempPath, filePath, overwrite: true);
+        try
+        {
+            await File.WriteAllTextAsync(tempPath, json);
+            File.Move(tempPath, filePath, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tempPath); } catch { }
+            throw;
+        }
     }
 
     public Task DeleteAsync(string trackedPath)
     {
         var filePath = GetFilePath(trackedPath);
-        if (File.Exists(filePath))
-            File.Delete(filePath);
+        try
+        {
+            if (File.Exists(filePath))
+                File.Delete(filePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         return Task.CompletedTask;
     }
 
